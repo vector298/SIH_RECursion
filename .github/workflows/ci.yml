@@ -1,0 +1,64 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+jobs:
+  backend:
+    name: Backend tests
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: backend
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+          cache: pip
+
+      - name: Install runtime dependencies
+        run: pip install -r requirements.txt
+
+      # CPU-only wheels — needed for the ArcFace loss tests, which otherwise skip.
+      - name: Install training dependencies
+        run: pip install -r requirements-train.txt --index-url https://download.pytorch.org/whl/cpu
+
+      - name: Run tests
+        run: python -m pytest -q
+
+      - name: Seed and smoke-test the API
+        run: |
+          python -m app.seed --records 200 --reset
+          uvicorn app.main:app --port 8000 &
+          for i in $(seq 1 30); do
+            curl -fsS http://localhost:8000/api/health && break || sleep 1
+          done
+          curl -fsS -X POST http://localhost:8000/api/cases/CASE-2026-0147/match \
+            | python -c "import json,sys; d=json.load(sys.stdin); \
+                assert d['candidates'], 'no candidates returned'; \
+                assert len(d['stages']) == 7, 'expected 7 pipeline stages'; \
+                print('match ok:', len(d['candidates']), 'candidates,', \
+                      round(d['duration_ms'], 1), 'ms')"
+
+  frontend:
+    name: Frontend build
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+          cache: npm
+
+      - run: npm ci
+      - run: npm run lint
+      - run: npm run build
+      - run: npm run build:single
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: standalone-build
+          path: dist-single/index.html

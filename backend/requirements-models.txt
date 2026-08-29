@@ -1,0 +1,15 @@
+# Optional: real face recognition and local sentence embeddings.
+#
+#   pip install -r requirements-models.txt
+#
+# InsightFace downloads the ArcFace 'buffalo_l' pack (~280 MB) on first use, so
+# the first run needs network access. Without these packages the service still
+# runs — see app/services/face.py for what it falls back to and
+# GET /api/health for which backend is actually live.
+
+insightface==0.7.3
+onnxruntime==1.24.1
+
+# Local text embeddings, used when no Gemini key is configured.
+# Downloads all-MiniLM-L6-v2 (~90 MB) on first use.
+sentence-transformers==5.1.2

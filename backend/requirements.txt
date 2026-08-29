@@ -1,0 +1,15 @@
+# Runtime dependencies — pinned to the versions this build was tested against.
+# Everything here installs on CPU with no model downloads.
+fastapi==0.141.1
+uvicorn[standard]==0.46.0
+sqlalchemy==2.0.52
+pydantic-settings==2.14.0
+python-multipart==0.0.26
+httpx==0.28.1
+
+numpy==2.4.4
+opencv-python-headless==4.13.0.92
+pillow==12.2.0
+
+# PostgreSQL driver. Not needed for the SQLite default.
+psycopg[binary]==3.2.12

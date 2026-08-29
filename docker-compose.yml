@@ -1,0 +1,45 @@
+# Full stack: PostgreSQL + API.
+#
+#   docker compose up --build
+#   docker compose exec api python -m app.seed --records 1500 --reset
+#
+# Then the API is on http://localhost:8000 (docs at /docs) and the React app,
+# run separately with `npm run dev`, will find it automatically.
+
+services:
+  db:
+    image: postgres:16-alpine
+    environment:
+      POSTGRES_USER: caseintel
+      POSTGRES_PASSWORD: caseintel
+      POSTGRES_DB: caseintel
+    volumes:
+      - caseintel-db:/var/lib/postgresql/data
+    ports:
+      - "5432:5432"
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U caseintel"]
+      interval: 5s
+      timeout: 3s
+      retries: 10
+
+  api:
+    build: ./backend
+    depends_on:
+      db:
+        condition: service_healthy
+    environment:
+      CASEINTEL_DATABASE_URL: postgresql+psycopg://caseintel:caseintel@db:5432/caseintel
+      # Optional — without it, structured extraction falls back to rules.
+      CASEINTEL_GEMINI_API_KEY: ${CASEINTEL_GEMINI_API_KEY:-}
+      CASEINTEL_CORS_ORIGINS: '["http://localhost:5173","http://localhost:4173"]'
+    volumes:
+      - caseintel-media:/srv/media
+      - caseintel-models:/srv/models
+    ports:
+      - "8000:8000"
+
+volumes:
+  caseintel-db:
+  caseintel-media:
+  caseintel-models:

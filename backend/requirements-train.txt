@@ -1,0 +1,10 @@
+# Optional: training only.
+#
+# Needed for app/core/arcface.py's ArcMarginProduct / ArcFaceLoss — the training
+# head. Inference and the whole API work without it.
+#
+# CPU-only wheels (much smaller than the default CUDA build):
+#   pip install -r requirements-train.txt --index-url https://download.pytorch.org/whl/cpu
+
+torch>=2.2
+pytest>=8.0
