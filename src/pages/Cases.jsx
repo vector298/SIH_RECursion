@@ -1,6 +1,9 @@
-import { useState, useMemo } from 'react';
+import { useState, useMemo, useDeferredValue } from 'react';
 import { Search, Plus, SlidersHorizontal } from 'lucide-react';
 import { CASES } from '../data/sample';
+import { listCases, adaptCase } from '../api/client';
+import { useApiData } from '../api/useApiData';
+import { SourceBanner, EmptyState, LoadingRows } from '../components/DataState';
 import CaseCard from '../components/CaseCard';
 
 const TYPES = [
@@ -21,22 +24,34 @@ export default function Cases({ go }) {
   const [prio, setPrio] = useState('All priorities');
   const [sort, setSort] = useState('conf');
 
+  // Typing shouldn't fire a request per keystroke.
+  const query = useDeferredValue(q);
+
+  const { data, loading, error, live } = useApiData(
+    (signal) => listCases({ caseType: type, priority: prio, q: query, limit: 120 }, signal)
+      .then((rows) => rows.map(adaptCase)),
+    CASES,
+    [type, prio, query],
+  );
+
   const list = useMemo(() => {
-    let l = CASES.filter((c) => {
+    // Filtering happens server-side when live; the client filter only has to
+    // handle the offline fixtures.
+    let rows = live ? data : data.filter((c) => {
       if (type !== 'all' && c.type !== type) return false;
       if (prio !== 'All priorities' && c.priority !== prio) return false;
-      if (q) {
+      if (query) {
         const hay = `${c.id} ${c.name || ''} ${c.location} ${c.state} ${c.status}`.toLowerCase();
-        if (!hay.includes(q.toLowerCase())) return false;
+        if (!hay.includes(query.toLowerCase())) return false;
       }
       return true;
     });
-    l = [...l].sort((a, b) =>
+
+    return [...rows].sort((a, b) =>
       sort === 'conf' ? b.confidence - a.confidence
       : sort === 'matches' ? b.matches - a.matches
-      : new Date(b.opened) - new Date(a.opened));
-    return l;
-  }, [q, type, prio, sort]);
+      : String(b.opened || '').localeCompare(String(a.opened || '')));
+  }, [data, live, type, prio, query, sort]);
 
   return (
     <div className="stack gap-24">
@@ -86,21 +101,22 @@ export default function Cases({ go }) {
         </div>
       </div>
 
-      <div className="row between">
+      <div className="row between wrap gap-12">
         <span className="mono" style={{ fontSize: 11, color: 'var(--dim)', letterSpacing: '.1em' }}>
           {list.length} {list.length === 1 ? 'RECORD' : 'RECORDS'}
         </span>
+        <SourceBanner live={live} loading={loading} error={error} count={live ? list.length : null} noun="cases" />
       </div>
 
-      {list.length ? (
-        <div className="case-grid">
-          {list.map((c, i) => <CaseCard key={c.id} c={c} go={go} delay={i * 60} />)}
-        </div>
-      ) : (
-        <div className="panel panel-pad" style={{ textAlign: 'center', padding: 44, color: 'var(--muted)' }}>
-          No records match those filters.
-        </div>
-      )}
+      {loading ? <LoadingRows rows={3} height={220} />
+        : list.length ? (
+          <div className="case-grid">
+            {list.map((c, i) => <CaseCard key={c.id} c={c} go={go} delay={Math.min(i, 8) * 60} />)}
+          </div>
+        ) : (
+          <EmptyState title="No records match those filters"
+                      hint="Widen the search, or create a case from the button above." />
+        )}
     </div>
   );
 }

@@ -351,27 +351,36 @@ function StepMarks({ f, set }) {
   });
   const [phase, setPhase] = useState('idle'); // idle | working | done
   const [source, setSource] = useState(null);
+  const [extracted, setExtracted] = useState(null);   // full API response
   const timer = useRef(null);
   const { online } = useBackend();
+
+  const title = (s) => (s ? s.charAt(0).toUpperCase() + s.slice(1) : '');
 
   const extract = async () => {
     if (!draft.text.trim()) return;
     setPhase('working');
+    setExtracted(null);
     clearTimeout(timer.current);
 
     if (online) {
       // Real extraction: Gemini when a key is configured, rules otherwise.
+      // One passage can describe several marks, so the response is a list.
       try {
         const r = await extractMark(draft.text);
-        setDraft((d) => ({
-          ...d,
-          kind: r.kind || d.kind,
-          location: r.body_location || d.location,
-          side: r.side || d.side,
-          size: r.size_text || d.size,
-          shape: r.shape || d.shape,
-        }));
-        setSource(r.source);
+        setExtracted(r);
+        const first = r.marks?.[0];
+        if (first) {
+          setDraft((d) => ({
+            ...d,
+            kind: title(first.type) || d.kind,
+            location: title(first.location) || d.location,
+            side: first.side && first.side !== 'unknown' ? title(first.side) : d.side,
+            size: first.size_text || d.size,
+            shape: first.shape || d.shape,
+          }));
+        }
+        setSource(r.degraded ? `${r.source} (fallback)` : r.source);
         setPhase('done');
         return;
       } catch {
@@ -398,6 +407,30 @@ function StepMarks({ f, set }) {
     if (!draft.text.trim() && !draft.location) return;
     set('marks', [...f.marks, { ...draft, id: Date.now() }]);
     setDraft({ kind: 'Scar', location: '', side: '', size: '', shape: '', text: '' });
+    setExtracted(null);
+    setPhase('idle');
+  };
+
+  const toMark = (m, index = 0) => ({
+    id: Date.now() + index,
+    kind: title(m.type),
+    location: title(m.location),
+    side: m.side && m.side !== 'unknown' ? title(m.side) : '',
+    size: m.size_text || '',
+    shape: m.shape || '',
+    // Store the canonical rendering: it is what gets embedded, so two records
+    // describing the same mark start closer together.
+    text: m.canonical_text || m.description || '',
+  });
+
+  const addExtracted = (m) => {
+    set('marks', [...f.marks, toMark(m)]);
+  };
+
+  const addAllExtracted = () => {
+    set('marks', [...f.marks, ...(extracted?.marks ?? []).map(toMark)]);
+    setDraft({ kind: 'Scar', location: '', side: '', size: '', shape: '', text: '' });
+    setExtracted(null);
     setPhase('idle');
   };
 
@@ -455,7 +488,42 @@ function StepMarks({ f, set }) {
           </div>
         </div>
 
-        {phase !== 'idle' && <ExtractionPanel phase={phase} draft={draft} source={source} />}
+        {phase !== 'idle' && <ExtractionPanel phase={phase} draft={draft} source={source} extracted={extracted} />}
+
+        {/* One passage often describes several marks. Offer all of them rather
+            than silently keeping only the first. */}
+        {phase === 'done' && extracted?.marks?.length > 1 && (
+          <div className="panel flat stack gap-12" style={{ padding: 15, borderColor: 'rgba(53,214,255,.26)' }}>
+            <div className="row between wrap gap-10">
+              <span className="eyebrow hot">{extracted.marks.length} MARKS FOUND IN THIS DESCRIPTION</span>
+              <button className="btn btn-sm btn-primary" onClick={addAllExtracted}>
+                <Plus size={12} strokeWidth={2.6} /> Add all {extracted.marks.length}
+              </button>
+            </div>
+            <div className="stack gap-8">
+              {extracted.marks.map((m, i) => (
+                <div key={i} className="row between wrap gap-10" style={{
+                  padding: '9px 11px', borderRadius: 9,
+                  background: 'rgba(4,8,16,.45)', border: '1px solid var(--line)',
+                }}>
+                  <div className="row gap-8 wrap" style={{ minWidth: 0 }}>
+                    <Badge tone="cyan">{String(m.type).toUpperCase()}</Badge>
+                    <span className="mono" style={{ fontSize: 10.5, color: 'var(--muted)' }}>
+                      {[m.side !== 'unknown' ? m.side : null, m.location, m.size_text, m.shape]
+                        .filter(Boolean).join(' · ') || 'no structured detail'}
+                    </span>
+                  </div>
+                  <button className="btn btn-sm btn-ghost" onClick={() => addExtracted(m)}>Add</button>
+                </div>
+              ))}
+            </div>
+            {!!extracted.clothing?.length && (
+              <div style={{ fontSize: 11.5, color: 'var(--dim)' }}>
+                Clothing also detected: {extracted.clothing.join('; ')} — record it on step 04.
+              </div>
+            )}
+          </div>
+        )}
 
         <div className="row gap-10">
           <button className="btn btn-primary btn-sm" onClick={add}><Plus size={13} strokeWidth={2.6} /> Add characteristic</button>
@@ -490,7 +558,7 @@ function StepMarks({ f, set }) {
   );
 }
 
-function ExtractionPanel({ phase, draft, source }) {
+function ExtractionPanel({ phase, draft, source, extracted }) {
   const rows = [
     ['Type', draft.kind], ['Location', draft.location], ['Side', draft.side],
     ['Size', draft.size], ['Shape', draft.shape],
@@ -529,7 +597,10 @@ function ExtractionPanel({ phase, draft, source }) {
             <span style={{ fontSize: 12.5 }}>Semantic representation generated</span>
           </div>
           <div className="row gap-8">
-            <span className="embed-chip">{source || 'TEXT EMBEDDING'}</span>
+            <span className="embed-chip">
+              {extracted?.embedding_model || source || 'TEXT EMBEDDING'}
+              {extracted?.embedding_dim ? ` · ${extracted.embedding_dim}-D` : ''}
+            </span>
             <span className="vecbar" style={{ width: 96 }}>
               {Array.from({ length: 20 }, (_, i) => (
                 <span key={i} style={{ height: `${25 + ((Math.sin(i * 2.1) + 1) / 2) * 70}%`, animationDelay: `${i * 22}ms` }} />

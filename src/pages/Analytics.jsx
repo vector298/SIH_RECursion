@@ -3,6 +3,9 @@ import {
   AreaChart, Area, PieChart, Pie, Cell, LineChart, Line,
 } from 'recharts';
 import { BY_STATE, CONFIDENCE_DIST, RESOLVED_OVER_TIME, AGE_DIST, METRICS } from '../data/sample';
+import { analyticsByState, analyticsConfidence, analyticsSummary } from '../api/client';
+import { useApiData } from '../api/useApiData';
+import { SourceBanner } from '../components/DataState';
 import { Reveal, Counter } from '../components/ui';
 
 const AXIS = { stroke: 'rgba(126,165,224,.18)', tick: { fill: '#5b6c8a', fontSize: 10 } };
@@ -15,26 +18,54 @@ const TOOLTIP = {
   cursor: { fill: 'rgba(53,214,255,.06)' },
 };
 
-const PIE = [
+const SAMPLE_PIE = [
   { name: 'Missing persons', value: 12482, c: '#35d6ff' },
   { name: 'Unidentified persons', value: 3096, c: '#8b7dff' },
   { name: 'Resolved & closed', value: 1364, c: '#35dfa0' },
 ];
 
+const pieFrom = (s) => [
+  { name: 'Missing persons', value: s.active_missing, c: '#35d6ff' },
+  { name: 'Unidentified persons', value: s.unidentified, c: '#8b7dff' },
+  { name: 'Resolved & closed', value: s.resolved, c: '#35dfa0' },
+].filter((r) => r.value > 0);
+
 export default function Analytics() {
+  const summary = useApiData((signal) => analyticsSummary(signal), null, []);
+  const byState = useApiData((signal) => analyticsByState(signal), BY_STATE, []);
+  const confidence = useApiData((signal) => analyticsConfidence(signal), CONFIDENCE_DIST, []);
+
+  const live = summary.live && byState.live;
+  const stateRows = byState.live ? byState.data : BY_STATE;
+  const confRows = confidence.live ? confidence.data : CONFIDENCE_DIST;
+
+  const pie = live ? pieFrom(summary.data) : SAMPLE_PIE;
+
+  const tiles = live
+    ? [['Records indexed', summary.data.total_records, ''],
+       ['Missing persons', summary.data.active_missing, ''],
+       ['Unidentified persons', summary.data.unidentified, ''],
+       ['Ranked candidates stored', summary.data.potential_matches, '']]
+    : [['Records indexed', 15578, ''], ['Cases resolved (12 mo)', 1364, ''],
+       ['Median time to identification', 34, ' d'], ['Candidate precision @ top-1', 78, '%']];
+
   return (
     <div className="stack gap-24">
-      <div>
-        <span className="eyebrow hot">INTELLIGENCE ANALYTICS</span>
-        <h1 className="page-title mt-8">Analytics</h1>
-        <p className="page-sub">
-          Caseload distribution, resolution velocity and confidence characteristics across the national index.
-        </p>
+      <div className="row between wrap gap-16">
+        <div>
+          <span className="eyebrow hot">INTELLIGENCE ANALYTICS</span>
+          <h1 className="page-title mt-8">Analytics</h1>
+          <p className="page-sub">
+            Caseload distribution and confidence characteristics across the national index.
+          </p>
+        </div>
+        <SourceBanner live={live} loading={summary.loading || byState.loading}
+                      error={summary.error || byState.error}
+                      count={live ? summary.data.total_records : null} noun="records" />
       </div>
 
       <div className="grid" style={{ gridTemplateColumns: 'repeat(auto-fit,minmax(190px,1fr))', gap: 13 }}>
-        {[['Records indexed', 15578, ''], ['Cases resolved (12 mo)', 1364, ''], ['Median time to identification', 34, ' d'], ['Candidate precision @ top-1', 78, '%']]
-          .map(([l, v, s], i) => (
+        {tiles.map(([l, v, s], i) => (
           <div key={l} className="panel panel-pad" style={{ animation: `fadeUp .5s ${i * 70}ms var(--ease-out) both` }}>
             <div className="label">{l}</div>
             <div className="mt-8" style={{ fontSize: 26, fontWeight: 600, letterSpacing: '-0.03em' }}>
@@ -47,7 +78,7 @@ export default function Analytics() {
       <div className="chart-grid">
         <Panel title="Cases by state" sub="Missing vs unidentified records held by each state bureau.">
           <ResponsiveContainer width="100%" height={280}>
-            <BarChart data={BY_STATE} margin={{ top: 6, right: 6, left: -18, bottom: 0 }}>
+            <BarChart data={stateRows} margin={{ top: 6, right: 6, left: -18, bottom: 0 }}>
               <CartesianGrid strokeDasharray="3 3" stroke="rgba(126,165,224,.08)" vertical={false} />
               <XAxis dataKey="state" {...AXIS} interval={0} angle={-28} textAnchor="end" height={62} />
               <YAxis {...AXIS} />
@@ -59,7 +90,7 @@ export default function Analytics() {
           </ResponsiveContainer>
         </Panel>
 
-        <Panel title="Cases opened vs resolved" sub="Twelve-month rolling view. Resolution rate is closing the gap.">
+        <Panel title="Cases opened vs resolved" sub="Illustrative twelve-month series — resolution history is not yet tracked server-side.">
           <ResponsiveContainer width="100%" height={280}>
             <AreaChart data={RESOLVED_OVER_TIME} margin={{ top: 6, right: 6, left: -18, bottom: 0 }}>
               <defs>
@@ -85,13 +116,13 @@ export default function Analytics() {
 
         <Panel title="Match confidence distribution" sub="Most candidates fall in the moderate band — exactly where officer judgement matters most.">
           <ResponsiveContainer width="100%" height={260}>
-            <BarChart data={CONFIDENCE_DIST} margin={{ top: 6, right: 6, left: -18, bottom: 0 }}>
+            <BarChart data={confRows} margin={{ top: 6, right: 6, left: -18, bottom: 0 }}>
               <CartesianGrid strokeDasharray="3 3" stroke="rgba(126,165,224,.08)" vertical={false} />
               <XAxis dataKey="bucket" {...AXIS} />
               <YAxis {...AXIS} />
               <Tooltip {...TOOLTIP} />
               <Bar dataKey="n" name="Candidates" radius={[3, 3, 0, 0]} maxBarSize={44}>
-                {CONFIDENCE_DIST.map((d, i) => (
+                {confRows.map((d, i) => (
                   <Cell key={i} fill={i >= 5 ? '#35dfa0' : i >= 3 ? '#35d6ff' : i >= 2 ? '#ffb156' : '#ff5f70'} />
                 ))}
               </Bar>
@@ -99,19 +130,19 @@ export default function Analytics() {
           </ResponsiveContainer>
         </Panel>
 
-        <Panel title="Register composition" sub="Split of the national index by record class.">
+        <Panel title="Register composition" sub="Split of the index by record class.">
           <ResponsiveContainer width="100%" height={260}>
             <PieChart>
               <Tooltip {...TOOLTIP} />
-              <Pie data={PIE} dataKey="value" nameKey="name" innerRadius={62} outerRadius={96} paddingAngle={3} stroke="none">
-                {PIE.map((d) => <Cell key={d.name} fill={d.c} />)}
+              <Pie data={pie} dataKey="value" nameKey="name" innerRadius={62} outerRadius={96} paddingAngle={3} stroke="none">
+                {pie.map((d) => <Cell key={d.name} fill={d.c} />)}
               </Pie>
               <Legend wrapperStyle={{ fontSize: 11 }} />
             </PieChart>
           </ResponsiveContainer>
         </Panel>
 
-        <Panel title="Age distribution of open cases" sub="Minors and young adults dominate the open caseload.">
+        <Panel title="Age distribution of open cases" sub="Illustrative distribution — not yet aggregated server-side.">
           <ResponsiveContainer width="100%" height={250}>
             <BarChart data={AGE_DIST} layout="vertical" margin={{ top: 6, right: 16, left: 6, bottom: 0 }}>
               <CartesianGrid strokeDasharray="3 3" stroke="rgba(126,165,224,.08)" horizontal={false} />
@@ -123,7 +154,7 @@ export default function Analytics() {
           </ResponsiveContainer>
         </Panel>
 
-        <Panel title="Average time to identification" sub="Days from case creation to officer-verified identification.">
+        <Panel title="Average time to identification" sub="Illustrative series — requires resolved cases to compute.">
           <ResponsiveContainer width="100%" height={250}>
             <LineChart data={METRICS[5].spark.map((v, i) => ({ m: RESOLVED_OVER_TIME[i].m, d: v }))}
                        margin={{ top: 6, right: 6, left: -18, bottom: 0 }}>

@@ -194,19 +194,33 @@ class CaseSummary(BaseModel):
 
 # ---------------------------------------------------------------------------
 class ExtractRequest(BaseModel):
-    text: str
+    text: str = Field(max_length=4000)
 
 
-class ExtractResponse(BaseModel):
-    kind: str | None = None
-    body_location: str | None = None
-    side: str | None = None
+class ExtractedMarkOut(BaseModel):
+    """One mark pulled out of the officer's free text."""
+    type: str
+    description: str
+    location: str | None = None
+    side: str = "unknown"
     size_text: str | None = None
     size_cm: float | None = None
     shape: str | None = None
-    confidence: float | None = None
-    source: str
-    embedding_generated: bool = False
+    attributes: list[str] = Field(default_factory=list)
+    confidence: float = 0.5
+    canonical_text: str = ""
+
+
+class ExtractResponse(BaseModel):
+    """A single passage can describe several marks, so this is always a list."""
+    marks: list[ExtractedMarkOut] = Field(default_factory=list)
+    clothing: list[str] = Field(default_factory=list)
+    other_details: list[str] = Field(default_factory=list)
+
+    # Provenance, so the interface can be honest about what produced this.
+    source: str = "unknown"
+    degraded: bool = False
+    warnings: list[str] = Field(default_factory=list)
     embedding_model: str | None = None
     embedding_dim: int | None = None
 

@@ -6,18 +6,20 @@ from datetime import date, datetime, timezone
 from pathlib import Path
 
 from fastapi import APIRouter, Depends, File, Form, HTTPException, Query, UploadFile
-from sqlalchemy import func, select
+from sqlalchemy import and_, func, select
 from sqlalchemy.orm import Session, selectinload
 
 from app.config import settings
 from app.core import quality, semantic
-from app.db.models import AuditLog, Case, Image, Mark
+from app.db.models import AuditLog, Candidate, Case, Image, Mark, MatchRun
 from app.db.session import get_db
 from app.schemas import (
-    CaseIn, CaseOut, CaseSummary, ExtractRequest, ExtractResponse, ImageOut, MarkIn, MarkOut,
+    CaseIn, CaseOut, CaseSummary, ExtractedMarkOut, ExtractRequest, ExtractResponse,
+    ImageOut, MarkIn, MarkOut,
 )
 from app.services import face as face_service
 from app.services import gemini
+from app.services.nlp import get_client
 
 router = APIRouter(prefix="/api/cases", tags=["cases"])
 
@@ -123,7 +125,36 @@ def list_cases(
             | Case.location_text.ilike(like) | Case.state.ilike(like)
         )
     stmt = stmt.order_by(Case.created_at.desc()).limit(limit).offset(offset)
-    return [CaseSummary.of(c) for c in db.scalars(stmt).unique()]
+    rows = list(db.scalars(stmt).unique())
+    if not rows:
+        return []
+
+    # Attach each case's best result from its most recent matching run, in one
+    # query rather than N. A case with no run reports None, not zero — "not yet
+    # searched" and "searched, found nothing" are different facts.
+    latest = (
+        select(MatchRun.case_id, func.max(MatchRun.created_at).label("newest"))
+        .where(MatchRun.case_id.in_([c.id for c in rows]))
+        .group_by(MatchRun.case_id)
+        .subquery()
+    )
+    summary = db.execute(
+        select(
+            MatchRun.case_id,
+            func.max(Candidate.confidence).label("top"),
+            func.count(Candidate.id).label("n"),
+        )
+        .join(latest, and_(MatchRun.case_id == latest.c.case_id,
+                           MatchRun.created_at == latest.c.newest))
+        .join(Candidate, Candidate.match_run_id == MatchRun.id)
+        .group_by(MatchRun.case_id)
+    ).all()
+    scores = {case_id: (top, n) for case_id, top, n in summary}
+
+    return [
+        CaseSummary.of(c, *scores.get(c.id, (None, None)))
+        for c in rows
+    ]
 
 
 @router.get("/{case_id}", response_model=CaseOut)
@@ -257,19 +288,39 @@ extract_router = APIRouter(prefix="/api/marks", tags=["marks"])
 
 @extract_router.post("/extract", response_model=ExtractResponse)
 def extract(payload: ExtractRequest):
-    """Free text -> structured identification-mark fields + a semantic vector."""
-    parsed = gemini.extract_mark(payload.text)
-    vector, backend = semantic.embed(payload.text)
+    """Free text -> structured identification marks.
+
+    One passage routinely describes several marks ("a scar above his left
+    eyebrow and a tattoo of a star on his right forearm"), so the response is
+    always a list. Output is validated against the Pydantic contract before it
+    is returned; if the model answers in an unexpected shape, the deterministic
+    extractor supplies the result instead and `degraded` says so.
+
+    This endpoint never fails because of an NLP outage.
+    """
+    features = get_client().extract_features(payload.text)
+
+    # One probe embedding tells the caller which backend is live and how wide
+    # the vectors are, without embedding every mark up front — that happens on
+    # write, in _attach_mark.
+    probe = get_client().generate_embedding(features.marks[0].canonical_text()) \
+        if features.marks else None
+
     return ExtractResponse(
-        kind=parsed.get("kind"),
-        body_location=parsed.get("body_location"),
-        side=parsed.get("side"),
-        size_text=parsed.get("size_text"),
-        size_cm=parsed.get("size_cm"),
-        shape=parsed.get("shape"),
-        confidence=parsed.get("confidence"),
-        source=parsed.get("source", gemini.backend_name()),
-        embedding_generated=bool(vector) or backend == "lexical-domain-v1",
-        embedding_model=backend if vector else semantic.backend_name(),
-        embedding_dim=len(vector) if vector else None,
+        marks=[
+            ExtractedMarkOut(
+                type=m.type, description=m.description, location=m.location,
+                side=m.side, size_text=m.size_text, size_cm=m.size_cm,
+                shape=m.shape, attributes=m.attributes, confidence=m.confidence,
+                canonical_text=m.canonical_text(),
+            )
+            for m in features.marks
+        ],
+        clothing=features.clothing,
+        other_details=features.other_details,
+        source=features.source,
+        degraded=features.degraded,
+        warnings=features.warnings,
+        embedding_model=(probe.model if probe and probe.vector else semantic.backend_name()),
+        embedding_dim=len(probe.vector) if probe and probe.vector else None,
     )

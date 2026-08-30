@@ -17,7 +17,7 @@ const TONES = {
 export default function MetricCard({ metric, delay = 0 }) {
   const t = TONES[metric.tone] || TONES.cyan;
   const Icon = ICONS[metric.icon] || Activity;
-  const up = metric.trend >= 0;
+  const up = (metric.trend ?? 0) >= 0;
   // For investigation time, a fall is the good direction.
   const good = metric.id === 'avgtime' || metric.id === 'high' ? !up : up;
   const trendCol = good ? '#35dfa0' : '#ff8e9b';
@@ -30,17 +30,27 @@ export default function MetricCard({ metric, delay = 0 }) {
       <div style={{ position: 'relative', zIndex: 1 }}>
         <div className="row between">
           <span className="mi"><Icon size={15} strokeWidth={1.9} /></span>
-          <Sparkline data={metric.spark} color={t.solid} w={58} h={20} />
+          {/* A sparkline next to a live count would imply a history the system
+              does not yet record. Absent data draws nothing. */}
+          {metric.spark ? <Sparkline data={metric.spark} color={t.solid} w={58} h={20} /> : null}
         </div>
         <div className="mv mt-12">
-          <Counter to={metric.value} suffix={metric.suffix || ''} duration={1500 + delay} />
+          {metric.value == null
+            ? <span className="num" style={{ color: 'var(--faint)' }}>—</span>
+            : <Counter to={metric.value} suffix={metric.suffix || ''} duration={1500 + delay} />}
         </div>
         <div className="row between mt-8" style={{ alignItems: 'flex-end', gap: 8 }}>
           <span className="ml">{metric.label}</span>
-          <span className="trend" style={{ color: trendCol, flexShrink: 0 }}>
-            {up ? <TrendingUp size={11} strokeWidth={2.2} /> : <TrendingDown size={11} strokeWidth={2.2} />}
-            {Math.abs(metric.trend).toFixed(1)}%
-          </span>
+          {metric.trend != null ? (
+            <span className="trend" style={{ color: trendCol, flexShrink: 0 }}>
+              {up ? <TrendingUp size={11} strokeWidth={2.2} /> : <TrendingDown size={11} strokeWidth={2.2} />}
+              {Math.abs(metric.trend).toFixed(1)}%
+            </span>
+          ) : metric.note ? (
+            <span className="mono" style={{ fontSize: 9, color: 'var(--faint)', letterSpacing: '.1em', flexShrink: 0 }}>
+              {metric.note}
+            </span>
+          ) : null}
         </div>
       </div>
     </div>

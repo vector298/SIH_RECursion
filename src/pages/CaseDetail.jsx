@@ -4,6 +4,9 @@ import {
   Pencil, ShieldCheck, Image as ImageIcon, NotebookPen, Sparkles,
 } from 'lucide-react';
 import { CASES, TIMELINE, CANDIDATES } from '../data/sample';
+import { getCase, adaptCase } from '../api/client';
+import { useApiData } from '../api/useApiData';
+import { SourceBanner, LoadingRows } from '../components/DataState';
 import Portrait from '../components/Portrait';
 import { UncertainValue } from '../components/UncertainField';
 import {
@@ -14,9 +17,26 @@ const TABS = ['Overview', 'Timeline', 'Evidence', 'Potential Matches', 'AI Analy
 const TL_COL = { cyan: '#35d6ff', violet: '#8b7dff', amber: '#ffb156', green: '#35dfa0', gray: '#7d90ae' };
 
 export default function CaseDetail({ go, params }) {
-  const c = CASES.find((x) => x.id === params?.id) || CASES[0];
+  const requested = params?.id ?? CASES[0].id;
+  const fallback = CASES.find((x) => x.id === requested) || CASES[0];
+
+  const { data: c, loading, error, live } = useApiData(
+    (signal) => getCase(requested, signal).then(adaptCase),
+    fallback,
+    [requested],
+  );
+
   const [tab, setTab] = useState('Overview');
-  const seed = parseInt(c.id.slice(-4), 10);
+  const seed = parseInt(String(c.id).replace(/\D/g, '').slice(-4) || '1', 10);
+
+  if (loading) {
+    return (
+      <div className="stack gap-20">
+        <SourceBanner live={false} loading />
+        <LoadingRows rows={2} height={160} />
+      </div>
+    );
+  }
 
   const ageV = c.ageMode === 'range' ? { mode: 'range', min: c.ageMin, max: c.ageMax } : { mode: 'exact', exact: c.ageExact };
   const hV = c.heightMode === 'range' ? { mode: 'range', min: c.heightMin, max: c.heightMax } : { mode: 'exact', exact: c.heightExact };
@@ -25,9 +45,12 @@ export default function CaseDetail({ go, params }) {
     <div className="stack gap-24">
       {/* header */}
       <div>
-        <button className="btn btn-sm btn-ghost" onClick={() => go('cases')}>
-          <ArrowLeft size={13} strokeWidth={2.2} /> All cases
-        </button>
+        <div className="row between wrap gap-12">
+          <button className="btn btn-sm btn-ghost" onClick={() => go('cases')}>
+            <ArrowLeft size={13} strokeWidth={2.2} /> All cases
+          </button>
+          <SourceBanner live={live} loading={false} error={error} noun="case file" />
+        </div>
 
         <div className="panel ticked panel-pad mt-16">
           <div className="row between wrap gap-18">
@@ -92,7 +115,8 @@ function Overview({ c, ageV, hV }) {
             <div className="kv" key={k}><span className="k">{k}</span><UncertainValue v={v} unit={u} /></div>
           ))}
           {[['Sex / Gender', c.sex], ['Build', c.build], ['Blood type', c.bloodType], ['District', c.district], ['State', c.state],
-            ['Coordinates', c.coords.join(', ')], ['Case opened', c.opened]].map(([k, v]) => (
+            ['Coordinates', (c.coords || []).filter((n) => n != null).join(', ') || 'Unknown'],
+            ['Case opened', c.opened || 'Unknown']].map(([k, v]) => (
             <div className="kv" key={k}>
               <span className="k">{k}</span>
               <span className="v" style={{ color: v === 'Unknown' ? 'var(--faint)' : 'var(--text)' }}>

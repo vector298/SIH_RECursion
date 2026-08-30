@@ -1,11 +1,47 @@
 import { Plus, ArrowRight, Radar, CircleHelp, Clock3, Database } from 'lucide-react';
 import { METRICS, CASES, TIMELINE } from '../data/sample';
+import { analyticsSummary, listCases, adaptCase } from '../api/client';
+import { useApiData } from '../api/useApiData';
+import { useBackend } from '../api/BackendContext';
+import { SourceBanner, LoadingRows } from '../components/DataState';
 import MetricCard from '../components/MetricCard';
 import CaseCard from '../components/CaseCard';
 import { Reveal, Badge, HumanLoopNotice, ConfidenceRing } from '../components/ui';
 
+/** Map the API's counts onto the metric tiles, keeping each tile's styling.
+ *
+ *  Trends and sparklines are dropped: the service records no history yet, and a
+ *  fabricated "+4.2%" beside a real count is the kind of detail that makes an
+ *  entire demo untrustworthy once someone checks it.
+ */
+function metricsFrom(summary) {
+  const by = Object.fromEntries(METRICS.map((m) => [m.id, m]));
+  const live = (tile, value, note) => ({ ...tile, value, note, trend: null, spark: null });
+
+  return [
+    live(by.active,   summary.active_missing),
+    live(by.unid,     summary.unidentified),
+    live(by.matches,  summary.potential_matches, 'STORED'),
+    live(by.high,     summary.high_priority),
+    live(by.resolved, summary.resolved),
+    // Requires resolved cases with verification timestamps to compute.
+    live(by.avgtime,  null, 'NO DATA YET'),
+  ];
+}
+
 export default function Dashboard({ go }) {
-  const active = CASES.slice(0, 4);
+  const { health } = useBackend();
+
+  const summary = useApiData((signal) => analyticsSummary(signal), null, []);
+  const cases = useApiData(
+    (signal) => listCases({ limit: 4 }, signal).then((rows) => rows.map(adaptCase)),
+    CASES.slice(0, 4),
+    [],
+  );
+
+  const metrics = summary.live && summary.data ? metricsFrom(summary.data) : METRICS;
+  const active = cases.data.slice(0, 4);
+  const topCase = active[0];
 
   return (
     <div className="stack gap-32">
@@ -27,8 +63,12 @@ export default function Dashboard({ go }) {
       </div>
 
       {/* metrics */}
-      <div className="metric-grid">
-        {METRICS.map((m, i) => <MetricCard key={m.id} metric={m} delay={i * 70} />)}
+      <div className="stack gap-12">
+        <SourceBanner live={summary.live} loading={summary.loading} error={summary.error}
+                      count={summary.live ? summary.data?.total_records : null} noun="records indexed" />
+        <div className="metric-grid">
+          {metrics.map((m, i) => <MetricCard key={m.id} metric={m} delay={i * 70} />)}
+        </div>
       </div>
 
       {/* main split */}
@@ -40,9 +80,13 @@ export default function Dashboard({ go }) {
               View all cases <ArrowRight size={13} strokeWidth={2.2} />
             </button>
           </div>
-          <div className="case-grid">
-            {active.map((c, i) => <CaseCard key={c.id} c={c} go={go} delay={i * 80} />)}
-          </div>
+          {cases.loading
+            ? <LoadingRows rows={2} height={220} />
+            : (
+              <div className="case-grid">
+                {active.map((c, i) => <CaseCard key={c.id} c={c} go={go} delay={i * 80} />)}
+              </div>
+            )}
         </div>
 
         <aside className="stack gap-16 dash-rail">
@@ -64,28 +108,36 @@ export default function Dashboard({ go }) {
                   </span>
                 </div>
                 <div style={{ fontSize: 12.5, lineHeight: 1.55 }}>
-                  Two candidates on <span className="mono" style={{ color: 'var(--cyan)' }}>CASE-2026-0147</span> are
-                  within 3 confidence points. A targeted question can separate them.
+                  Run matching on{' '}
+                  <span className="mono" style={{ color: 'var(--cyan)' }}>{topCase?.id ?? '—'}</span>{' '}
+                  to see whether its leading candidates are close enough to need a targeted question.
                 </div>
                 <button className="btn btn-sm" style={{ alignSelf: 'flex-start' }}
-                        onClick={() => go('compare', { id: 'CASE-2026-0304' })}>
-                  Answer question <ArrowRight size={12} strokeWidth={2.4} />
+                        disabled={!topCase}
+                        onClick={() => topCase && go('match', { id: topCase.id })}>
+                  Run matching <ArrowRight size={12} strokeWidth={2.4} />
                 </button>
               </div>
 
-              <div className="row gap-14" style={{ padding: '4px 2px' }}>
-                <ConfidenceRing value={92} size={74} stroke={5} label="TOP" />
-                <div className="stack gap-6 grow">
-                  <div className="mono" style={{ fontSize: 10.5, color: 'var(--cyan)' }}>CASE-2026-0147</div>
-                  <div style={{ fontSize: 12, color: 'var(--muted)', lineHeight: 1.5 }}>
-                    6 candidates ranked. Highest-confidence lead awaiting physical verification.
+              {topCase && (
+                <div className="row gap-14" style={{ padding: '4px 2px' }}>
+                  {topCase.confidence > 0 && (
+                    <ConfidenceRing value={topCase.confidence} size={74} stroke={5} label="TOP" />
+                  )}
+                  <div className="stack gap-6 grow">
+                    <div className="mono" style={{ fontSize: 10.5, color: 'var(--cyan)' }}>{topCase.id}</div>
+                    <div style={{ fontSize: 12, color: 'var(--muted)', lineHeight: 1.5 }}>
+                      {topCase.matches
+                        ? `${topCase.matches} candidate${topCase.matches === 1 ? '' : 's'} ranked. Highest-confidence lead awaiting physical verification.`
+                        : 'No matching run recorded yet for this case.'}
+                    </div>
+                    <button className="btn btn-sm btn-ghost" style={{ alignSelf: 'flex-start' }}
+                            onClick={() => go('match', { id: topCase.id })}>
+                      Review ranking
+                    </button>
                   </div>
-                  <button className="btn btn-sm btn-ghost" style={{ alignSelf: 'flex-start' }}
-                          onClick={() => go('match', { id: 'CASE-2026-0147' })}>
-                    Review ranking
-                  </button>
                 </div>
-              </div>
+              )}
 
               <HumanLoopNotice compact />
             </div>
@@ -95,10 +147,18 @@ export default function Dashboard({ go }) {
             <div className="panel panel-pad stack gap-12">
               <span className="section-title" style={{ fontSize: 12 }}>Index status</span>
               {[
-                ['National record index', '12,482', Database, '#35d6ff'],
-                ['Unidentified persons', '3,096', Database, '#8b7dff'],
-                ['Bureaus synchronised', '28 / 28', Clock3, '#35dfa0'],
-                ['Last full re-rank', '11 min ago', Clock3, '#7d90ae'],
+                ['National record index',
+                  (summary.live ? summary.data.total_records : 12482).toLocaleString('en-IN'),
+                  Database, '#35d6ff'],
+                ['Unidentified persons',
+                  (summary.live ? summary.data.unidentified : 3096).toLocaleString('en-IN'),
+                  Database, '#8b7dff'],
+                ['Database',
+                  health?.database === 'postgresql' ? 'PostgreSQL' : health?.database ?? 'sample',
+                  Database, '#35dfa0'],
+                ['Language model',
+                  health?.backends?.gemini_configured ? 'Gemini' : 'local rules',
+                  Clock3, health?.backends?.gemini_configured ? '#35dfa0' : '#ffb156'],
               ].map(([l, v, Icon, c]) => (
                 <div className="kv" key={l}>
                   <span className="k row gap-7"><Icon size={11} strokeWidth={2} color={c} /> {l}</span>

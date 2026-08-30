@@ -67,7 +67,7 @@ which is in use.
 | # | Stage | What it does |
 |---|-------|--------------|
 | 01 | Data ingestion | Normalises the probe; resolves exact / range / unknown modes |
-| 02 | Hard search | Indexed SQL reduction — sex, time window, geographic box |
+| 02 | Hard search | Indexed SQL: sex, blood type, time window, geographic box |
 | 03 | Attribute filtering | Interval comparison with time-projected ages |
 | 04 | Semantic comparison | Identification-mark descriptions via embeddings |
 | 05 | Facial comparison | ArcFace embeddings, cosine similarity |
@@ -79,7 +79,7 @@ surviving set sizes. Nothing is scripted.
 
 ---
 
-## Four decisions worth knowing about
+## Five decisions worth knowing about
 
 ### 1. Unknown is not zero
 
@@ -126,7 +126,42 @@ investigative tool sends officers to the wrong address.
 * **Inference** never touches the loss: take the trained backbone's 512-D
   output, L2-normalise, compare by cosine.
 
-### 4. Gemini does language, not identity
+### 4. The NLP layer is provider-agnostic
+
+Nothing in `core/` imports Gemini. The matching engine talks to `NlpClient`
+(`app/services/nlp.py`), which exposes exactly three operations:
+
+```python
+client.extract_features(text)        # free text -> validated ExtractedFeatures
+client.generate_embedding(text)      # text      -> vector (or None)
+client.semantic_similarity(a, b)     # two texts -> score in [0, 1]
+```
+
+Swapping Gemini for another provider means writing one class satisfying the
+`LlmProvider` protocol and passing it to `NlpClient`. No other file changes.
+
+**Model output is validated, not trusted.** Everything the model returns is
+parsed through the Pydantic models in `services/nlp_schemas.py` before it can
+reach the matcher. Unexpected enum values are normalised (`"SCARRING"` → `scar`,
+`"LT"` → `left`); output that cannot be coerced is discarded and the
+deterministic extractor supplies the result instead.
+
+**Failure is a normal path, not an exception.** A missing key, timeout, quota
+rejection, HTTP 500 or schema violation all resolve the same way: log it, mark
+the result `degraded`, return deterministic output. No method raises into the
+matching path — verified in `tests/test_nlp.py`, which drives every one of those
+failures and asserts a usable result still comes back.
+
+One passage routinely describes several marks, so extraction always returns a
+list:
+
+> *"a scar above his left eyebrow and a tattoo of a star on his right forearm.
+> He was last seen wearing a blue shirt."*
+
+yields two marks (scar/eyebrow/left, tattoo/forearm/right) plus the clothing,
+with or without a key.
+
+### 5. Gemini does language, not identity
 
 Gemini handles structured extraction from free-text marks, text embeddings,
 evidence narratives, and image quality / soft-attribute reads.

@@ -2,11 +2,29 @@ import { useState, useMemo } from 'react';
 import { MapPin, Filter, Layers } from 'lucide-react';
 import IndiaMap, { project } from '../components/IndiaMap';
 import { MAP_POINTS as RAW_POINTS, MAP_LINKS, CASES } from '../data/sample';
+import { analyticsMap } from '../api/client';
+import { useApiData } from '../api/useApiData';
+import { SourceBanner } from '../components/DataState';
 
-const MAP_POINTS = RAW_POINTS.map((p) => ({ ...p, ...project(p.lon, p.lat) }));
 import { Badge, Reveal, confColor } from '../components/ui';
 
-const STATES = ['All states', ...[...new Set(MAP_POINTS.map((p) => p.state))].sort()];
+const SAMPLE_POINTS = RAW_POINTS.map((p) => ({ ...p, ...project(p.lon, p.lat) }));
+
+/** API map rows -> the shape the markers expect, projected for drawing. */
+function adaptPoints(rows) {
+  return rows
+    .filter((r) => r.lat != null && r.lon != null)
+    .map((r) => ({
+      id: r.case_number,
+      city: r.city || (r.state ?? '—'),
+      state: r.state ?? 'Unknown',
+      kind: r.kind,
+      lon: r.lon,
+      lat: r.lat,
+      conf: 0,
+      ...project(r.lon, r.lat),
+    }));
+}
 const KINDS = [
   { id: 'all', label: 'All' },
   { id: 'missing', label: 'Missing' },
@@ -18,15 +36,39 @@ export default function Geospatial({ go }) {
   const [minConf, setMinConf] = useState(0);
   const [state, setState] = useState('All states');
 
+  const { data: points, loading, error, live } = useApiData(
+    (signal) => analyticsMap(signal).then(adaptPoints),
+    SAMPLE_POINTS,
+    [],
+  );
+
+  const STATES = useMemo(
+    () => ['All states', ...[...new Set(points.map((p) => p.state))].filter(Boolean).sort()],
+    [points],
+  );
+
   const pts = useMemo(
-    () => MAP_POINTS.filter((p) =>
+    () => points.filter((p) =>
       (kind === 'all' || p.kind === kind) &&
       (state === 'All states' || p.state === state) &&
-      p.conf >= minConf),
-    [kind, minConf, state]
+      (p.conf ?? 0) >= minConf),
+    [points, kind, minConf, state]
   );
   const visible = new Set(pts.map((p) => p.id));
-  const byId = Object.fromEntries(MAP_POINTS.map((p) => [p.id, p]));
+  const byId = Object.fromEntries(points.map((p) => [p.id, p]));
+
+  // Derived from whatever is currently on the map, so the panel always agrees
+  // with the markers rather than asserting fixed corridors.
+  const topStates = useMemo(() => {
+    const tally = new Map();
+    for (const p of pts) {
+      const row = tally.get(p.state) ?? { total: 0, missing: 0, unidentified: 0 };
+      row.total += 1;
+      row[p.kind === 'missing' ? 'missing' : 'unidentified'] += 1;
+      tally.set(p.state, row);
+    }
+    return [...tally.entries()].sort((a, b) => b[1].total - a[1].total).slice(0, 5);
+  }, [pts]);
 
   return (
     <div className="stack gap-24">
@@ -39,9 +81,13 @@ export default function Geospatial({ go }) {
             record pairs the matching engine has associated.
           </p>
         </div>
-        <div className="row gap-10 wrap">
-          <Badge tone="cyan"><i className="dot" />{pts.filter((p) => p.kind === 'missing').length} MISSING</Badge>
-          <Badge tone="violet"><i className="dot" />{pts.filter((p) => p.kind === 'unidentified').length} UNIDENTIFIED</Badge>
+        <div className="stack gap-10" style={{ alignItems: 'flex-end' }}>
+          <div className="row gap-10 wrap">
+            <Badge tone="cyan"><i className="dot" />{pts.filter((p) => p.kind === 'missing').length} MISSING</Badge>
+            <Badge tone="violet"><i className="dot" />{pts.filter((p) => p.kind === 'unidentified').length} UNIDENTIFIED</Badge>
+          </div>
+          <SourceBanner live={live} loading={loading} error={error}
+                        count={live ? points.length : null} noun="geocoded cases" />
         </div>
       </div>
 
@@ -63,7 +109,7 @@ export default function Geospatial({ go }) {
               <rect width="100" height="100" fill="url(#mg)" />
               <IndiaMap states fill="rgba(24,62,102,.3)" stroke="rgba(130,190,245,.5)" strokeWidth={0.32}
                         stateStroke="rgba(120,180,240,.2)" stateWidth={0.14} />
-              {MAP_LINKS.filter(([a, b]) => visible.has(a) && visible.has(b)).map(([a, b], i) => {
+              {(live ? [] : MAP_LINKS).filter(([a, b]) => visible.has(a) && visible.has(b)).map(([a, b], i) => {
                 const A = byId[a], B = byId[b];
                 const mx = (A.x + B.x) / 2 - (B.y - A.y) * 0.22;
                 const my = (A.y + B.y) / 2 + (B.x - A.x) * 0.22;
@@ -84,7 +130,7 @@ export default function Geospatial({ go }) {
               return (
                 <div key={p.id} className="marker"
                      style={{ left: `${p.x}%`, top: `${p.y}%`, '--mc': col, '--md': `${i * 0.28}s` }}
-                     onClick={() => CASES.find((c) => c.id === p.id) && go('case', { id: p.id })}>
+                     onClick={() => go('case', { id: p.id })}>
                   <i />
                   <div className="mtip">
                     <div className="mono" style={{ fontSize: 10, color: 'var(--cyan)' }}>{p.id}</div>
@@ -93,7 +139,9 @@ export default function Geospatial({ go }) {
                       <span className="badge" style={{
                         color: col, background: `${col}18`, borderColor: `${col}45`,
                       }}>{p.kind.toUpperCase()}</span>
-                      <span className="mono" style={{ fontSize: 10, color: confColor(p.conf) }}>{p.conf}%</span>
+                      {p.conf > 0 && (
+                        <span className="mono" style={{ fontSize: 10, color: confColor(p.conf) }}>{p.conf}%</span>
+                      )}
                     </div>
                   </div>
                 </div>
@@ -165,19 +213,25 @@ export default function Geospatial({ go }) {
 
           <Reveal>
             <div className="panel ticked panel-pad stack gap-12">
-              <span className="section-title"><Layers size={12} strokeWidth={2} style={{ marginLeft: -2 }} /> Detected clusters</span>
-              {[
-                ['Bengaluru ↔ Chennai corridor', '2 linked records · 92% top confidence', '#35dfa0'],
-                ['Pune ↔ Nagpur corridor', '2 linked records · 69% top confidence', '#35d6ff'],
-                ['Hyderabad ↔ Vijayawada corridor', '2 linked records · 74% top confidence', '#35d6ff'],
-              ].map(([t, s, c]) => (
-                <div key={t} className="row gap-11" style={{
+              <span className="section-title"><Layers size={12} strokeWidth={2} style={{ marginLeft: -2 }} /> Caseload by state</span>
+              {topStates.length === 0 && (
+                <p className="note" style={{ fontSize: 12, color: 'var(--muted)' }}>
+                  No geocoded cases match the current filters.
+                </p>
+              )}
+              {topStates.map(([name, counts]) => (
+                <div key={name} className="row gap-11" style={{
                   padding: '11px 12px', borderRadius: 10, border: '1px solid var(--line)', background: 'rgba(4,8,16,.4)',
                 }}>
-                  <MapPin size={14} strokeWidth={2} color={c} style={{ flexShrink: 0, marginTop: 1 }} />
-                  <div>
-                    <div style={{ fontSize: 12.5, fontWeight: 500 }}>{t}</div>
-                    <div style={{ fontSize: 11, color: 'var(--muted)', marginTop: 2 }}>{s}</div>
+                  <MapPin size={14} strokeWidth={2} color="#35d6ff" style={{ flexShrink: 0, marginTop: 1 }} />
+                  <div className="grow">
+                    <div className="row between gap-10">
+                      <span style={{ fontSize: 12.5, fontWeight: 500 }}>{name}</span>
+                      <span className="mono" style={{ fontSize: 11.5 }}>{counts.total}</span>
+                    </div>
+                    <div style={{ fontSize: 11, color: 'var(--muted)', marginTop: 2 }}>
+                      {counts.missing} missing · {counts.unidentified} unidentified
+                    </div>
                   </div>
                 </div>
               ))}

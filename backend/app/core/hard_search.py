@@ -57,14 +57,31 @@ def run(db: Session, probe: Case, *, time_grace_days: int = 30, time_window_year
                             corpus, 0, f"case_type = '{target_type}'"))
 
     # --- sex ---------------------------------------------------------------
+    # A recorded mismatch eliminates: two records that both state a sex, and
+    # state different ones, are not the same person. A record that states none
+    # is retained — silence is not disagreement.
     if probe.sex:
         stmt = base.where(or_(Case.sex.is_(None), Case.sex == probe.sex))
-        predicate = f"sex IS NULL OR sex = '{probe.sex}'"
+        predicate = f"sex IS NULL OR sex = '{probe.sex}'  (recorded mismatch eliminates)"
     else:
         stmt = base
         predicate = "sex unknown on probe — no filter applied"
     n = count_of(stmt)
     steps.append(FunnelStep("hard", "After sex filter (unknown retained)", n, corpus - n, predicate))
+    prev = n
+
+    # --- blood type --------------------------------------------------------
+    # The strongest hard filter available: blood group does not change, so two
+    # records stating different groups cannot describe one person. Like sex, it
+    # only fires when BOTH sides recorded a value — and unknown is common enough
+    # at intake that this usually removes nothing at all.
+    if probe.blood_type:
+        stmt = stmt.where(or_(Case.blood_type.is_(None), Case.blood_type == probe.blood_type))
+        predicate = f"blood_type IS NULL OR blood_type = '{probe.blood_type}'  (recorded mismatch eliminates)"
+    else:
+        predicate = "blood type unknown on probe — no filter applied"
+    n = count_of(stmt)
+    steps.append(FunnelStep("hard", "After blood type (unknown retained)", n, prev - n, predicate))
     prev = n
 
     # --- time window -------------------------------------------------------

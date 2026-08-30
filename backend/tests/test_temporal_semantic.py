@@ -102,8 +102,8 @@ class TestSemanticMarks:
         assert semantic.lexical_similarity(a, b) < 0.3
 
     def test_domain_synonyms_are_normalised(self):
-        assert "eyebrow" in semantic.normalise("scar over the brow")
-        assert "birthmark" in semantic.normalise("a small mole on the arm")
+        assert "eyebrow" in semantic.normalise_tokens("scar over the brow")
+        assert "birthmark" in semantic.normalise_tokens("a small mole on the arm")
 
     def test_opposite_sides_are_counter_evidence(self):
         same, _ = semantic.compare_marks(

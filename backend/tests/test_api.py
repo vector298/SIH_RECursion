@@ -115,22 +115,48 @@ class TestExtraction:
         body = client.post("/api/marks/extract", json={
             "text": "3 cm horizontal scar above the left eyebrow"
         }).json()
-        assert body["kind"] == "Scar"
-        assert body["body_location"] == "Eyebrow"
-        assert body["side"] == "Left"
-        assert body["size_cm"] == pytest.approx(3.0)
-        assert body["shape"] == "Linear"
+        assert len(body["marks"]) == 1
+        mark = body["marks"][0]
+        assert mark["type"] == "scar"
+        assert mark["location"] == "eyebrow"
+        assert mark["side"] == "left"
+        assert mark["size_cm"] == pytest.approx(3.0)
+        assert mark["shape"] == "Linear"
 
     def test_tattoo_and_millimetres(self, client):
         body = client.post("/api/marks/extract", json={
             "text": "faded 40 mm anchor tattoo on the right shoulder"
         }).json()
-        assert body["kind"] == "Tattoo"
-        assert body["side"] == "Right"
-        assert body["size_cm"] == pytest.approx(4.0)
+        mark = body["marks"][0]
+        assert mark["type"] == "tattoo"
+        assert mark["side"] == "right"
+        assert mark["size_cm"] == pytest.approx(4.0)
+        assert "faded" in mark["attributes"]
+
+    def test_one_passage_yields_several_marks(self, client):
+        """The case the old single-mark contract silently dropped."""
+        body = client.post("/api/marks/extract", json={
+            "text": ("The person has a scar above his left eyebrow and a tattoo of a star "
+                     "on his right forearm. He was last seen wearing a blue shirt.")
+        }).json()
+        kinds = {m["type"] for m in body["marks"]}
+        assert kinds == {"scar", "tattoo"}
+
+        scar = next(m for m in body["marks"] if m["type"] == "scar")
+        tattoo = next(m for m in body["marks"] if m["type"] == "tattoo")
+        assert (scar["location"], scar["side"]) == ("eyebrow", "left")
+        assert (tattoo["location"], tattoo["side"]) == ("forearm", "right")
+        assert any("blue shirt" in c for c in body["clothing"])
+
+    def test_response_declares_its_provenance(self, client):
+        body = client.post("/api/marks/extract", json={"text": "scar on the left cheek"}).json()
+        assert body["source"] in ("rules", "gemini")
+        assert isinstance(body["degraded"], bool)
 
     def test_empty_text_is_handled(self, client):
-        assert client.post("/api/marks/extract", json={"text": "   "}).status_code == 200
+        body = client.post("/api/marks/extract", json={"text": "   "})
+        assert body.status_code == 200
+        assert body.json()["marks"] == []
 
 
 class TestMatching:
