@@ -158,14 +158,38 @@ attached to invented case records, and the abstraction also stands in honestly f
 biometric pipeline (the landmark overlay represents the embedding stage). Facial vectors
 are described in the UI but never rendered as raw numbers.
 
-## Wiring it to a backend
+## How the console talks to the API
 
-Replace `src/data/sample.js` with API calls. The shapes the UI expects:
+`src/api/client.js` holds every call plus the adapters that map API records onto
+the shapes the components expect. `src/api/BackendContext.jsx` polls
+`GET /api/health` and exposes `online`; screens read it and choose their source.
+Submitting a case always attempts the API regardless of the last probe result,
+so a backend started after the page loaded still works.
 
-- `CASES[]` — case records, with `ageMode`/`heightMode` of `exact` | `range` and
-  `Unknown` permitted on any scalar field.
-- `CANDIDATES[]` — ranked results carrying `confidence` plus a `scores` object
-  (`face`, `marks`, `demographic`, `time`, `quality`, `location`), an `evidence[]`
-  narrative and a `concerns[]` list.
-- `PIPELINE[]` / `FUNNEL[]` — stage timings and search-space counts returned by the
-  matching run, so the animation reflects real execution rather than fixed values.
+Point the console at a different API with `VITE_API_URL` (default
+`http://localhost:8000`):
+
+```bash
+VITE_API_URL=https://api.example.org npm run build
+```
+
+`src/data/sample.js` remains the offline corpus — what the standalone build ships
+with, and what every screen falls back to when the API is unreachable. The top
+bar always states which of the two you are looking at.
+
+## Security status
+
+There is **no authentication or authorisation** — every endpoint is open. This is
+a demonstration build. Before it goes near real case data it needs auth,
+per-jurisdiction access control, embeddings encrypted at rest, media behind
+signed URLs, and a DPDP Act review. See the end of `backend/README.md`.
+
+Database credentials belong in `backend/.env`, which is gitignored. A credential
+committed once stays readable in git history even after the file is deleted, so
+the only real remedy at that point is rotating it.
+
+## Acknowledgements
+
+Built with AI assistance (Claude). Architecture, model selection, calibration
+methodology and code were developed collaboratively; the reasoning behind the
+significant design decisions is documented inline and in `backend/README.md`.

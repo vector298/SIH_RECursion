@@ -24,18 +24,29 @@ export function BackendProvider({ children }) {
   useEffect(() => {
     const controller = new AbortController();
     let cancelled = false;
+    let timer;
 
-    getHealth(controller.signal)
-      .then((body) => {
-        if (cancelled) return;
-        setHealth(body);
-        setStatus('online');
-      })
-      .catch(() => {
-        if (!cancelled) setStatus('offline');
-      });
+    const probe = () => {
+      getHealth(controller.signal)
+        .then((body) => {
+          if (cancelled) return;
+          setHealth(body);
+          setStatus('online');
+          // Keep checking, more slowly, so a backend that goes down is noticed.
+          timer = setTimeout(probe, 30000);
+        })
+        .catch(() => {
+          if (cancelled) return;
+          setStatus('offline');
+          // Retry while offline: people routinely start the API after opening
+          // the page, and a one-shot probe would strand the app on sample data
+          // until a manual refresh.
+          timer = setTimeout(probe, 5000);
+        });
+    };
 
-    return () => { cancelled = true; controller.abort(); };
+    probe();
+    return () => { cancelled = true; clearTimeout(timer); controller.abort(); };
   }, [nonce]);
 
   const value = useMemo(() => ({

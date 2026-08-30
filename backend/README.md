@@ -23,8 +23,26 @@ Docs at http://localhost:8000/docs. **Start with `GET /api/health`** — it repo
 which model backends are actually live, so you know before a demo whether you
 are on real ArcFace weights and a Gemini key or on the local fallbacks.
 
-Requires Python 3.11+. SQLite by default; set `CASEINTEL_DATABASE_URL` for
-PostgreSQL. Or run the whole stack:
+Requires Python 3.11+. SQLite by default — zero setup.
+
+### Using PostgreSQL instead
+
+```bash
+pip install "psycopg[binary]"
+cp .env.example .env          # then set CASEINTEL_DATABASE_URL
+python scripts/check_db.py    # confirms the connection before you start
+python -m app.seed --records 1500 --reset
+```
+
+`.env` holds the password and is gitignored. Keep it that way: a credential
+committed once stays readable in git history even after it is deleted, so the
+only real remedy is rotating the password.
+
+`scripts/check_db.py` reports what the app will connect to and, on failure,
+names the likely cause — service stopped, wrong port, missing database, wrong
+credentials or missing driver.
+
+Or run the whole stack in containers:
 
 ```bash
 docker compose up --build

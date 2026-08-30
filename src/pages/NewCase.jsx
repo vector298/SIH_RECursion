@@ -71,7 +71,9 @@ function toApiPayload(f) {
 
 const INITIAL = {
   caseType: null,
-  caseNumber: 'CASE-2026-0331',
+  // Left blank so the server assigns the next free number. Hard-coding one made
+  // every second submission collide with the first.
+  caseNumber: '',
   name: U('exact'),
   age: { mode: 'range', exact: '', min: '23', max: '27' },
   sex: U('exact'),
@@ -103,17 +105,26 @@ export default function NewCase({ go }) {
   const canNext = step !== 0 || !!f.caseType;
 
   const submit = async () => {
-    if (!online) {                       // offline demo: nothing to persist to
-      setSubmitted({ case_number: f.caseNumber, id: null, persisted: false });
-      return;
-    }
     setSaving(true);
     setError(null);
     try {
+      // Always attempt the API, even if the last health probe said offline —
+      // the probe may simply be stale because the backend started after this
+      // page loaded. Only fall back once a real request has actually failed.
       const record = await createCase(toApiPayload(f));
       setSubmitted({ ...record, persisted: true });
     } catch (err) {
-      setError(err.message || 'Could not save the case.');
+      if (err.status === 409) {
+        setError(
+          `${err.detail} — clear the case number field to have one assigned automatically, ` +
+          `or enter a different one.`
+        );
+      } else if (err.status) {
+        setError(`The API rejected this case (${err.status}): ${err.detail}`);
+      } else {
+        // No response at all: the service is genuinely unreachable.
+        setSubmitted({ case_number: f.caseNumber || '(unassigned)', id: null, persisted: false });
+      }
     } finally {
       setSaving(false);
     }
@@ -132,7 +143,9 @@ export default function NewCase({ go }) {
             the matching engine is built to reason with incomplete reports.
           </p>
         </div>
-        <span className="mono badge badge-cyan" style={{ fontSize: 11, padding: '6px 11px' }}>{f.caseNumber}</span>
+        <span className="mono badge badge-cyan" style={{ fontSize: 11, padding: '6px 11px' }}>
+          {f.caseNumber || 'NUMBER ASSIGNED ON SUBMIT'}
+        </span>
       </div>
 
       {/* progress rail */}
@@ -241,7 +254,10 @@ function StepIdentity({ f, set }) {
     <div className="panel ticked panel-pad stack gap-20">
       <span className="section-title">Identity</span>
       <div className="form-grid">
-        <Field label="Case number"><input className="input mono" value={f.caseNumber} onChange={(e) => set('caseNumber', e.target.value)} /></Field>
+        <Field label="Case number">
+          <input className="input mono" value={f.caseNumber} placeholder="Leave blank to auto-assign"
+                 onChange={(e) => set('caseNumber', e.target.value)} />
+        </Field>
         <UncertainField label="Name" value={f.name} onChange={(v) => set('name', v)}
                         placeholder="Full name as reported"
                         hint="For unidentified person cases this is normally recorded as unknown." />
@@ -736,19 +752,44 @@ function Submitted({ record, go }) {
     <div className="stack gap-20" style={{ maxWidth: 640, margin: '40px auto', textAlign: 'center', alignItems: 'center' }}>
       <div style={{
         width: 66, height: 66, borderRadius: 20, display: 'grid', placeItems: 'center',
-        background: 'rgba(53,223,160,.12)', border: '1px solid rgba(53,223,160,.34)',
-        boxShadow: '0 0 40px -12px rgba(53,223,160,.7)', animation: 'scaleIn .5s var(--ease-out) both',
+        background: record.persisted ? 'rgba(53,223,160,.12)' : 'rgba(255,177,86,.12)',
+        border: `1px solid ${record.persisted ? 'rgba(53,223,160,.34)' : 'rgba(255,177,86,.4)'}`,
+        boxShadow: `0 0 40px -12px ${record.persisted ? 'rgba(53,223,160,.7)' : 'rgba(255,177,86,.7)'}`,
+        animation: 'scaleIn .5s var(--ease-out) both',
       }}>
-        <CircleCheckBig size={30} strokeWidth={1.8} color="#35dfa0" />
+        {record.persisted
+          ? <CircleCheckBig size={30} strokeWidth={1.8} color="#35dfa0" />
+          : <ShieldAlert size={30} strokeWidth={1.8} color="#ffb156" />}
       </div>
       <div className="anim-2">
-        <h2 style={{ fontSize: 24 }}>Case registered</h2>
-        <p className="page-sub" style={{ margin: '8px auto 0' }}>
-          <span className="mono" style={{ color: 'var(--cyan)' }}>{number}</span>{' '}
-          {record.persisted
-            ? 'has been written to the index and is ready for cross-state matching.'
-            : 'was captured locally. The API is not reachable, so nothing was saved — reconnect it to persist and match this case.'}
-        </p>
+        <h2 style={{ fontSize: 24 }}>{record.persisted ? 'Case registered' : 'Not saved'}</h2>
+        {record.persisted ? (
+          <p className="page-sub" style={{ margin: '8px auto 0' }}>
+            <span className="mono" style={{ color: 'var(--cyan)' }}>{number}</span>{' '}
+            has been written to the index and is ready for cross-state matching.
+          </p>
+        ) : (
+          <div className="stack gap-12" style={{ marginTop: 12, maxWidth: 520 }}>
+            <p className="page-sub" style={{ margin: 0 }}>
+              The API did not respond, so <strong>this case was not written to the
+              database</strong>. Nothing has been stored anywhere — re-submit once the
+              backend is running.
+            </p>
+            <div className="stack gap-6" style={{
+              padding: '12px 14px', borderRadius: 10, textAlign: 'left',
+              border: '1px solid rgba(255,177,86,.26)', background: 'rgba(255,177,86,.06)',
+            }}>
+              <span className="mono" style={{ fontSize: 10, letterSpacing: '.13em', color: '#ffc98a' }}>
+                START THE BACKEND
+              </span>
+              <code style={{ fontSize: 11.5, color: 'var(--text-2)', lineHeight: 1.7 }}>
+                cd backend<br />
+                python scripts/check_db.py<br />
+                uvicorn app.main:app --reload
+              </code>
+            </div>
+          </div>
+        )}
       </div>
       <div className="row gap-12 wrap center anim-3">
         <button className="btn btn-primary" onClick={() => go('match', { id: number })}>

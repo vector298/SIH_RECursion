@@ -14,7 +14,14 @@ BASE_DIR = Path(__file__).resolve().parent.parent
 
 
 class Settings(BaseSettings):
-    model_config = SettingsConfigDict(env_file=".env", env_prefix="CASEINTEL_", extra="ignore")
+    # Absolute path, not ".env" — a relative env_file resolves against the current
+    # working directory, so running `uvicorn app.main:app` from the repo root
+    # instead of from backend/ would silently miss the file and fall back to
+    # SQLite. Anchoring it to the package means the configured database is used
+    # no matter where the server is started from.
+    model_config = SettingsConfigDict(
+        env_file=BASE_DIR / ".env", env_prefix="CASEINTEL_", extra="ignore"
+    )
 
     app_name: str = "CASE//INTEL API"
     version: str = "1.0.0"
