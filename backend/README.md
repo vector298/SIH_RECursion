@@ -55,10 +55,18 @@ docker compose exec api python -m app.seed --records 1500 --reset
 pip install -r requirements-models.txt   # InsightFace ArcFace + sentence-transformers
 pip install -r requirements-train.txt --index-url https://download.pytorch.org/whl/cpu
 cp .env.example .env                     # add CASEINTEL_GEMINI_API_KEY
+python scripts/check_gemini.py           # prove the key actually works
 ```
 
 Nothing above is required. Every one has a local fallback and the API reports
 which is in use.
+
+`/api/health` reports `gemini_configured: true` as soon as a key is *present*.
+That is not the same as a key that *works*: with an invalid key, health still
+says configured while every call quietly degrades to the fallbacks.
+`scripts/check_gemini.py` makes real calls and separates the cases —
+no key / invalid key / out of quota / live — naming the specific cause for each
+HTTP status. It never prints the key.
 
 ---
 
@@ -237,6 +245,8 @@ app/
   synthetic.py         drawn portraits for seeding and tests
   seed.py              fictional corpus
 scripts/
+  check_db.py          diagnose the database connection
+  check_gemini.py      prove the Gemini key is live, not merely present
   calibrate_face.py    measure EER / AUC, print the calibration entry
   generate-india-geo.mjs   (frontend map geometry — see ../README.md)
 ```
