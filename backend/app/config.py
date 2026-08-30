@@ -52,7 +52,12 @@ class Settings(BaseSettings):
     gemini_model: str = "gemini-3.6-flash"
     gemini_embed_model: str = "gemini-embedding-001"
     gemini_base_url: str = "https://generativelanguage.googleapis.com/v1beta"
-    gemini_timeout_s: float = 20.0
+
+    # 20s was too tight: Gemini 3.x flash defaults to high reasoning effort and
+    # a structured extraction routinely ran past it on a domestic connection.
+    # Extraction now asks for minimal thinking, but the ceiling stays generous —
+    # a slow answer is still an answer, and the fallback costs a whole request.
+    gemini_timeout_s: float = 45.0
 
     # Embedding width. gemini-embedding-001 returns 3072 by default and supports
     # Matryoshka truncation; 768 keeps stored vectors a quarter the size at

@@ -40,6 +40,9 @@ CHAT, EMBED = "chat", "embed"
 # without turning a single embedding into an unbounded walk of the catalogue.
 MAX_MODEL_ATTEMPTS = 3
 
+# How many timeouts before a model is treated as unusable rather than slow.
+TIMEOUT_RETIRE_AFTER = 3
+
 # Substrings that disqualify a model outright for our two uses.
 _CHAT_EXCLUDE = ("embedding", "aqa", "tts", "image-generation", "imagen", "veo")
 _DOWNRANK = ("preview", "exp", "-exp-", "thinking", "-lite", "-8b", "learnlm")
@@ -92,7 +95,9 @@ class GeminiProvider:
         self._chosen: dict[str, str | None] = {}
         self._unusable: set[str] = set()
         self._bare_payload: set[str] = set()
+        self._no_thinking_field: set[str] = set()
         self._confirmed: set[str] = set()
+        self._timeouts: dict[str, int] = {}
 
     # -- capability ------------------------------------------------------
     def available(self) -> bool:
@@ -277,22 +282,54 @@ class GeminiProvider:
             log.warning("Gemini returned a non-JSON body on %s", path)
             return None, status
 
+    def _thinking(self, model: str) -> dict | None:
+        """Reasoning effort for a mechanical task.
+
+        Gemini 3.x flash models default to ``thinkingLevel: "high"``, which is
+        the right default for open-ended work and badly wrong here: pulling
+        four fields out of one sentence does not need deliberation, and paying
+        for it took a real key past a 20-second timeout on every extraction.
+
+        The field name changed between generations — 3.x takes ``thinkingLevel``
+        and 2.5 takes ``thinkingBudget``, and sending both is a 400 — so the
+        model's own version decides. Anything unrecognised gets nothing.
+        """
+        if model in self._no_thinking_field:
+            return None
+
+        match = _VERSION.search(model)
+        if not match:
+            return None
+        version = float(f"{match.group(1)}.{match.group(2) or 0}")
+
+        if version >= 3:
+            return {"thinkingLevel": "minimal"}
+        if version >= 2.5:
+            return {"thinkingBudget": 0}
+        return None
+
     def _generate(self, parts: list[dict], *, schema: dict | None = None,
                   system: str | None = None, temperature: float = 0.1) -> str | None:
-        payload: dict[str, Any] = {"contents": [{"parts": parts}]}
-        if system:
-            payload["systemInstruction"] = {"parts": [{"text": system}]}
-        payload["generationConfig"] = (
+        base: dict[str, Any] = (
             {"responseMimeType": "application/json", "responseSchema": schema,
              "temperature": temperature}
             if schema else {"temperature": temperature}
         )
 
         data = None
+        timed_out = 0
         for _ in range(MAX_MODEL_ATTEMPTS):
             model = self.resolve(CHAT)
             if not model:
                 return None
+
+            payload: dict[str, Any] = {"contents": [{"parts": parts}]}
+            if system:
+                payload["systemInstruction"] = {"parts": [{"text": system}]}
+            payload["generationConfig"] = dict(base)
+            if (thinking := self._thinking(model)) is not None:
+                payload["generationConfig"]["thinkingConfig"] = thinking
+
             data, status = self._request(
                 "POST", f"models/{model}:generateContent", json=payload)
             if data:
@@ -302,7 +339,30 @@ class GeminiProvider:
                 # Listed but closed to this key. Retire it and try the next.
                 self._retire(CHAT, model)
                 continue
+            if status == 400 and "thinkingConfig" in payload["generationConfig"]:
+                # An unsupported knob is not a dead model. Drop it and retry.
+                log.info("Gemini model %s rejected thinkingConfig; retrying without it", model)
+                self._no_thinking_field.add(model)
+                continue
+            if status is None and not timed_out:
+                # A timeout or transport error. Try one other model before
+                # giving up — but only once, because each attempt costs the
+                # full timeout and the caller is waiting on a match run.
+                timed_out += 1
+                skipped = model
+                self._timeouts[model] = self._timeouts.get(model, 0) + 1
+                log.warning("Gemini model %s did not answer in time (%d); trying one alternative",
+                            model, self._timeouts[model])
+                self._retire(CHAT, model)
+                continue
             return None
+
+        # A single timeout is a blip, not proof a model is dead, so the skip
+        # above is undone unless the model has now missed repeatedly. Otherwise
+        # one slow afternoon would permanently downgrade the better model.
+        if timed_out and self._timeouts.get(skipped, 0) < TIMEOUT_RETIRE_AFTER:
+            self._unusable.discard(skipped)
+            self._chosen.pop(CHAT, None)
 
         if not data:
             return None

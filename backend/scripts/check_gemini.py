@@ -132,6 +132,23 @@ def main() -> int:                                               # noqa: C901
             print("       demo cannot shift under you mid-presentation.")
 
     def report_unavailable(kind: str, method: str) -> None:
+        """Why the call failed — which is not always "no model available".
+
+        An earlier version of this script printed "nothing reachable supports
+        generateContent" and then listed six models that do, because it treated
+        every failure as a missing model. A timeout and an empty catalogue are
+        different problems with different fixes, so they are now told apart.
+        """
+        chosen = provider.resolve(kind)
+        if chosen:
+            line(BAD, f"{kind} model", f"{chosen} is available but the call did not succeed")
+            print("       The model exists and the key reaches it, so this is not a")
+            print("       model-name problem. The log line above names the cause —")
+            print(f"       a timeout usually means the answer took longer than "
+                  f"{settings.gemini_timeout_s:.0f}s;")
+            print("       raise CASEINTEL_GEMINI_TIMEOUT_S if your connection is slow.")
+            return
+
         options = sorted(n for n, methods in catalogue.items() if method in methods)
         line(BAD, f"{kind} model", f"nothing reachable supports {method}")
         if options:

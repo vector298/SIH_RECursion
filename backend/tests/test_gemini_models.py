@@ -21,10 +21,13 @@ from app.services.nlp import NlpClient
 class FakeApi:
     """A Gemini-shaped API whose failures are configurable per model."""
 
-    def __init__(self, models, *, dead=(), no_task_type=(), embed_dim=3072):
+    def __init__(self, models, *, dead=(), no_task_type=(), embed_dim=3072,
+                 slow=(), no_thinking=()):
         self.models = models                  # {name: [methods]}
         self.dead = set(dead)                 # listed, but 404 when called
         self.no_task_type = set(no_task_type)  # 400 when taskType is sent
+        self.slow = set(slow)                 # times out (status None)
+        self.no_thinking = set(no_thinking)   # 400 when thinkingConfig is sent
         self.embed_dim = embed_dim
         self.calls: list[tuple[str, dict]] = []
 
@@ -38,6 +41,10 @@ class FakeApi:
         name = path.split("models/")[1].split(":")[0]
         if name in self.dead or name not in self.models:
             return None, 404
+        if name in self.slow:
+            return None, None                 # timeout: no status at all
+        if name in self.no_thinking and "thinkingConfig" in (json or {}).get("generationConfig", {}):
+            return None, 400
         if "embedContent" in path:
             if name in self.no_task_type and "taskType" in json:
                 return None, 400
@@ -124,6 +131,84 @@ def test_pinning_refuses_to_substitute():
     p = provider_with(api, model="gemini-2.5-flash")
     p.pin_models = True
     assert p.resolve(CHAT) is None
+
+
+# ---------------------------------------------------------------- thinking --
+def test_extraction_asks_for_minimal_thinking():
+    """Gemini 3.x flash defaults to high effort, which timed out a real key.
+
+    Pulling four fields out of one sentence is mechanical work; paying for
+    deliberation on it bought nothing and cost the whole request.
+    """
+    api = FakeApi(CURRENT)
+    p = provider_with(api, model="gemini-3.6-flash")
+    p.structured("a scar", schema={}, system="")
+
+    _, body = next(c for c in api.calls if "generateContent" in c[0])
+    assert body["generationConfig"]["thinkingConfig"] == {"thinkingLevel": "minimal"}
+
+
+def test_the_thinking_field_matches_the_model_generation():
+    """3.x takes thinkingLevel, 2.5 takes thinkingBudget; both is a 400."""
+    api = FakeApi({"gemini-2.5-flash": ["generateContent"]})
+    p = provider_with(api, model="gemini-2.5-flash")
+    p.structured("a scar", schema={}, system="")
+
+    _, body = next(c for c in api.calls if "generateContent" in c[0])
+    config = body["generationConfig"]["thinkingConfig"]
+    assert config == {"thinkingBudget": 0}
+    assert "thinkingLevel" not in config
+
+
+def test_a_model_that_rejects_thinking_config_still_answers():
+    api = FakeApi(CURRENT, no_thinking={"gemini-3.6-flash"})
+    p = provider_with(api, model="gemini-3.6-flash")
+
+    assert p.structured("a scar", schema={}, system="") == {"marks": []}
+    bodies = [b for c, b in api.calls if "generateContent" in c]
+    assert "thinkingConfig" in bodies[0]["generationConfig"]
+    assert "thinkingConfig" not in bodies[1]["generationConfig"]
+
+
+# ----------------------------------------------------------------- timeouts --
+def test_a_timeout_falls_through_to_another_model():
+    api = FakeApi(CURRENT, slow={"gemini-3.6-flash"})
+    p = provider_with(api, model="gemini-3.6-flash")
+
+    assert p.structured("a scar", schema={}, system="") == {"marks": []}
+    used = [c.split("models/")[1].split(":")[0] for c, _ in api.calls if "generateContent" in c]
+    assert used[0] == "gemini-3.6-flash"
+    assert used[1] != "gemini-3.6-flash"
+
+
+def test_one_timeout_does_not_permanently_retire_a_model():
+    """A slow afternoon must not downgrade the preferred model for good."""
+    api = FakeApi(CURRENT, slow={"gemini-3.6-flash"})
+    p = provider_with(api, model="gemini-3.6-flash")
+    p.structured("a scar", schema={}, system="")
+
+    assert "gemini-3.6-flash" not in p._unusable          # noqa: SLF001
+    assert p.resolve(CHAT) == "gemini-3.6-flash"          # still preferred
+
+
+def test_repeated_timeouts_do_retire_a_model():
+    api = FakeApi(CURRENT, slow={"gemini-3.6-flash"})
+    p = provider_with(api, model="gemini-3.6-flash")
+    for _ in range(3):
+        p.structured("a scar", schema={}, system="")
+
+    assert "gemini-3.6-flash" in p._unusable              # noqa: SLF001
+    assert p.resolve(CHAT) != "gemini-3.6-flash"
+
+
+def test_only_one_alternative_is_tried_after_a_timeout():
+    """Each attempt costs the full timeout; a match run is waiting."""
+    api = FakeApi(CURRENT, slow=set(CURRENT))
+    p = provider_with(api, model="gemini-3.6-flash")
+
+    assert p.structured("a scar", schema={}, system="") is None
+    attempts = [c for c, _ in api.calls if "generateContent" in c]
+    assert len(attempts) == 2
 
 
 # ----------------------------------------------------------- field handling --

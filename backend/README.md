@@ -99,6 +99,19 @@ CASEINTEL_GEMINI_PIN_MODELS=true     # fail instead of substituting
 
 Pin them before a demo so the presentation cannot shift underneath you.
 
+**Extraction asks for minimal reasoning effort.** Gemini 3.x flash models
+default to `thinkingLevel: "high"`, which is right for open-ended work and wrong
+here — pulling four fields out of one sentence is mechanical, and paying for
+deliberation on it took a real key past the timeout on every call. The field
+name changed between generations (`thinkingLevel` on 3.x, `thinkingBudget` on
+2.5, and sending both is a 400), so the model's own version decides which is
+sent; a model that rejects the field gets it dropped rather than retired.
+
+A timeout falls through to one alternative model and no further — each attempt
+costs the full timeout and a match run is waiting. A single timeout is treated
+as a blip; only after three does a model get retired, so one slow afternoon
+cannot permanently downgrade the better model.
+
 **Vectors from two different embedding models are never compared.** The same
 sentence lands in unrelated coordinate systems, so the cosine between them is
 noise wearing the costume of a similarity score — and when the widths happen to
