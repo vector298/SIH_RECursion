@@ -51,9 +51,12 @@ def embed(text: str) -> tuple[list[float] | None, str]:
 
 def text_similarity(a: str, b: str,
                     vec_a: list[float] | None = None,
-                    vec_b: list[float] | None = None) -> float:
+                    vec_b: list[float] | None = None,
+                    model_a: str | None = None,
+                    model_b: str | None = None) -> float:
     """Similarity in [0, 1] between two free-text descriptions."""
-    return get_client().semantic_similarity(a, b, vector_a=vec_a, vector_b=vec_b).score
+    return get_client().semantic_similarity(
+        a, b, vector_a=vec_a, vector_b=vec_b, model_a=model_a, model_b=model_b).score
 
 
 def _size_similarity(a_cm: float | None, b_cm: float | None) -> float | None:
@@ -68,6 +71,8 @@ def _pair_score(probe_mark, candidate_mark) -> dict:
     similarity = client.semantic_similarity(
         probe_mark.description or "", candidate_mark.description or "",
         vector_a=probe_mark.embedding, vector_b=candidate_mark.embedding,
+        model_a=getattr(probe_mark, "embedding_model", None),
+        model_b=getattr(candidate_mark, "embedding_model", None),
     )
 
     parts: list[tuple[float, float]] = [(similarity.score, TEXT_WEIGHT)]

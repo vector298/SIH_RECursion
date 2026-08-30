@@ -63,10 +63,53 @@ which is in use.
 
 `/api/health` reports `gemini_configured: true` as soon as a key is *present*.
 That is not the same as a key that *works*: with an invalid key, health still
-says configured while every call quietly degrades to the fallbacks.
+says configured while every call quietly degrades to the fallbacks. So health
+also carries `backends.gemini.chat_verified` — true only once a real call has
+succeeded on the model now selected — and the dashboard shows an unverified key
+in amber rather than rounding it up to green.
+
 `scripts/check_gemini.py` makes real calls and separates the cases —
-no key / invalid key / out of quota / live — naming the specific cause for each
-HTTP status. It never prints the key.
+no key / invalid key / retired model / out of quota / live — naming the specific
+cause for each HTTP status. It never prints the key.
+
+### Model names are a preference, not a requirement
+
+Google retires model IDs faster than a hackathon project gets updated. During
+development, on a freshly issued key:
+
+* `text-embedding-004` was withdrawn — 404 on every embedding call;
+* `gemini-2.5-flash` was still *listed* by ListModels and answered 404 anyway
+  ("no longer available to new users"), so a catalogue lookup is not proof;
+* the replacement embedding family rejects the `taskType` field its predecessor
+  required — a 400 where the old model wanted the opposite.
+
+A hard-coded model name survives none of these. `services/gemini.py` therefore
+asks the key what it can reach, prefers the configured name, and substitutes the
+nearest equivalent when it cannot — preferring a stable release over a preview
+and the same tier over a newer version, because silently promoting `flash` to
+`pro` multiplies the cost during a demo. A model that 404s on use is retired and
+the next candidate tried, bounded at three attempts. Every substitution is
+logged with the setting that would make it explicit:
+
+```
+CASEINTEL_GEMINI_MODEL=gemini-3.6-flash
+CASEINTEL_GEMINI_EMBED_MODEL=gemini-embedding-001
+CASEINTEL_GEMINI_PIN_MODELS=true     # fail instead of substituting
+```
+
+Pin them before a demo so the presentation cannot shift underneath you.
+
+**Vectors from two different embedding models are never compared.** The same
+sentence lands in unrelated coordinate systems, so the cosine between them is
+noise wearing the costume of a similarity score — and when the widths happen to
+match, nothing in the numbers reveals it. Each stored vector carries the name of
+the model that produced it; mismatched pairs are re-embedded or fall back to
+lexical. After a model change, bring the corpus forward:
+
+```bash
+python scripts/reembed_marks.py --dry-run
+python scripts/reembed_marks.py
+```
 
 ---
 
@@ -247,6 +290,7 @@ app/
 scripts/
   check_db.py          diagnose the database connection
   check_gemini.py      prove the Gemini key is live, not merely present
+  reembed_marks.py     bring stored vectors onto the current embedding model
   calibrate_face.py    measure EER / AUC, print the calibration entry
   generate-india-geo.mjs   (frontend map geometry — see ../README.md)
 ```

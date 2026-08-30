@@ -56,8 +56,9 @@ STATUS_ADVICE = {
          "       is not enabled on that project, or the key has referrer/IP\n"
          "       restrictions. A key from https://aistudio.google.com/apikey has\n"
          "       neither by default.",
-    404: "That model does not exist for this API version. List what your key can\n"
-         "       reach — this script does that in step 1.",
+    404: "That model has been retired, or was never available to this key. The\n"
+         "       provider substitutes the nearest equivalent automatically; this\n"
+         "       only fails outright when nothing suitable is reachable.",
     429: "Quota or rate limit. The key is valid; you are out of requests for now.\n"
          "       The app degrades to rules and lexical comparison until it clears.",
 }
@@ -112,30 +113,42 @@ def main() -> int:                                               # noqa: C901
         print(f"\n  Google said: {response.text[:300]}")
         return 1
 
-    names = [m.get("name", "").removeprefix("models/")
-             for m in response.json().get("models", [])]
-    line(OK, "authentication", f"HTTP 200 in {elapsed:.0f}ms, {len(names)} models visible")
+    catalogue = provider.catalogue()
+    line(OK, "authentication", f"HTTP 200 in {elapsed:.0f}ms, {len(catalogue)} models visible")
 
-    for label, wanted in (("chat model", settings.gemini_model),
-                          ("embed model", settings.gemini_embed_model)):
-        if wanted in names:
-            line(OK, label, wanted)
-        else:
-            failures += 1
-            close = [n for n in names if wanted.split("-")[0] in n][:4]
-            line(BAD, label, f"{wanted} is not available to this key")
-            if close:
-                print(f"       available instead: {', '.join(close)}")
+    def report_model(kind: str, wanted: str) -> None:
+        """What the provider settled on, after the call proved it works.
+
+        Deliberately reported *after* the call rather than from ListModels: a
+        model can be listed and still answer 404 on use, which is exactly how
+        gemini-2.5-flash behaves for keys issued after it closed. Only the call
+        is evidence.
+        """
+        chosen = provider.resolve(kind)
+        if chosen and chosen != wanted:
+            setting = "CASEINTEL_GEMINI_EMBED_MODEL" if kind == "embed" else "CASEINTEL_GEMINI_MODEL"
+            line(WARN, f"{kind} model", f"{wanted} is unavailable — using {chosen}")
+            print(f"       Pin it with {setting}={chosen} in backend/.env so the")
+            print("       demo cannot shift under you mid-presentation.")
+
+    def report_unavailable(kind: str, method: str) -> None:
+        options = sorted(n for n, methods in catalogue.items() if method in methods)
+        line(BAD, f"{kind} model", f"nothing reachable supports {method}")
+        if options:
+            print(f"       this key can reach: {', '.join(options[:6])}")
 
     # -- 2. embeddings ------------------------------------------------------
     started = time.perf_counter()
     vector = provider.embed(PARA_A)
     elapsed = (time.perf_counter() - started) * 1000
     if vector:
-        line(OK, "embedding", f"{len(vector)}-D vector in {elapsed:.0f}ms")
+        line(OK, "embedding", f"{len(vector)}-D vector from "
+                              f"{provider.resolve('embed')} in {elapsed:.0f}ms")
+        report_model("embed", settings.gemini_embed_model)
     else:
         failures += 1
         line(BAD, "embedding", "returned nothing — see the log line above for the reason")
+        report_unavailable("embed", "embedContent")
 
     # -- 3. structured extraction ------------------------------------------
     started = time.perf_counter()
@@ -143,10 +156,13 @@ def main() -> int:                                               # noqa: C901
     elapsed = (time.perf_counter() - started) * 1000
 
     if features.source == "gemini" and not features.degraded:
-        line(OK, "extraction", f"{len(features.marks)} mark(s) from Gemini in {elapsed:.0f}ms")
+        line(OK, "extraction", f"{len(features.marks)} mark(s) from "
+                               f"{provider.resolve('chat')} in {elapsed:.0f}ms")
+        report_model("chat", settings.gemini_model)
     else:
         failures += 1
         line(BAD, "extraction", f"source={features.source} degraded={features.degraded}")
+        report_unavailable("chat", "generateContent")
         for warning in features.warnings:
             print(f"       {warning}")
         print("       The rule-based extractor answered instead. The request still")
@@ -197,6 +213,10 @@ def main() -> int:                                               # noqa: C901
     print("\nIn that response, source must be \"gemini\" and degraded false. If the")
     print("script passes but the endpoint says \"rules\", the server is running with")
     print("older settings — restart uvicorn.")
+    print("\nThen bring the stored corpus onto this embedding model, so mark")
+    print("comparison uses embeddings rather than falling back to word overlap:")
+    print("  python scripts/reembed_marks.py --dry-run")
+    print("  python scripts/reembed_marks.py")
     return 0
 
 

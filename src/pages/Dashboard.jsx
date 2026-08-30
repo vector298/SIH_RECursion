@@ -29,6 +29,22 @@ function metricsFrom(summary) {
   ];
 }
 
+/** Label, icon and colour for the language-model row.
+ *
+ *  Three states, not two. "Key set" and "key working" look identical from the
+ *  outside — an invalid key still reports as configured while every call
+ *  silently falls back — so the middle state gets its own amber label rather
+ *  than being rounded up to green.
+ */
+function languageBackend(health) {
+  const g = health?.backends?.gemini;
+  if (!health?.backends?.gemini_configured) return ['local rules', Clock3, '#ffb156'];
+  if (!g) return ['Gemini (key set)', Clock3, '#ffb156'];
+  const model = (g.chat_model || '').replace(/^gemini-/, '');
+  if (g.chat_verified) return [`Gemini ${model}`, Clock3, '#35dfa0'];
+  return [`Gemini ${model} — unverified`, Clock3, '#ffb156'];
+}
+
 export default function Dashboard({ go }) {
   const { health } = useBackend();
 
@@ -156,9 +172,10 @@ export default function Dashboard({ go }) {
                 ['Database',
                   health?.database === 'postgresql' ? 'PostgreSQL' : health?.database ?? 'sample',
                   Database, '#35dfa0'],
-                ['Language model',
-                  health?.backends?.gemini_configured ? 'Gemini' : 'local rules',
-                  Clock3, health?.backends?.gemini_configured ? '#35dfa0' : '#ffb156'],
+                // A key being set is not the same as a key that works, and the
+                // difference is invisible until a call is made — so an
+                // unconfirmed key reads amber, not green.
+                ['Language model', ...languageBackend(health)],
               ].map(([l, v, Icon, c]) => (
                 <div className="kv" key={l}>
                   <span className="k row gap-7"><Icon size={11} strokeWidth={2} color={c} /> {l}</span>

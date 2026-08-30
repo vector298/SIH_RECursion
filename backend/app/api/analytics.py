@@ -42,6 +42,10 @@ def health(db: Session = Depends(get_db)):
             "semantic": semantic.backend_name(),
             "language": gemini.backend_name(),
             "gemini_configured": gemini.available(),
+            # "configured" only means a key is set. Whether the selected model
+            # actually answers is a separate question, and the one that matters
+            # before a demo — so it is reported separately rather than implied.
+            "gemini": gemini.get_provider().status(),
         },
         counts=counts,
     )

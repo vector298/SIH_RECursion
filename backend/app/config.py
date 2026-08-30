@@ -42,11 +42,26 @@ class Settings(BaseSettings):
     # evidence narratives, and image quality / soft-attribute reads.
     # NOT used for face identification — Gemini has no face-embedding endpoint
     # and its policy prohibits identifying individuals from images.
+    #
+    # These two names are a *preference*, not a requirement. Google retires
+    # model IDs faster than a hackathon project gets updated — text-embedding-004
+    # was withdrawn and gemini-2.5-flash closed to new keys while this was being
+    # written — so the provider asks the key which models it can actually reach
+    # and picks the closest match. A stale name here costs nothing.
     gemini_api_key: str | None = None
-    gemini_model: str = "gemini-2.5-flash"
-    gemini_embed_model: str = "text-embedding-004"
+    gemini_model: str = "gemini-3.6-flash"
+    gemini_embed_model: str = "gemini-embedding-001"
     gemini_base_url: str = "https://generativelanguage.googleapis.com/v1beta"
     gemini_timeout_s: float = 20.0
+
+    # Embedding width. gemini-embedding-001 returns 3072 by default and supports
+    # Matryoshka truncation; 768 keeps stored vectors a quarter the size at
+    # negligible quality cost. Vectors from different models are never compared,
+    # so changing this is safe — it makes old vectors unusable, not wrong.
+    gemini_embed_dim: int = 768
+
+    # Set true to pin the names above exactly and fail rather than substitute.
+    gemini_pin_models: bool = False
 
     # --- Face recognition ----------------------------------------------
     # InsightFace ArcFace ("buffalo_l" bundles a ResNet-100 trained with the

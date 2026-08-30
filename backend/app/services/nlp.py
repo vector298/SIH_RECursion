@@ -269,8 +269,14 @@ class NlpClient:
 
     def __init__(self, provider: LlmProvider | None = None) -> None:
         if provider is None:
-            from app.services.gemini import GeminiProvider
-            provider = GeminiProvider()
+            # The shared instance, not a fresh one. A provider accumulates
+            # negotiation state — which models this key can reach, which are
+            # retired, which reject an optional field — and a second instance
+            # would repeat the discovery calls and disagree with the first
+            # about which model is live, so /api/health would describe a
+            # different backend than the one actually answering requests.
+            from app.services.gemini import get_provider
+            provider = get_provider()
         self.provider = provider
 
     # -- health ----------------------------------------------------------
@@ -361,6 +367,8 @@ class NlpClient:
         *,
         vector_a: list[float] | None = None,
         vector_b: list[float] | None = None,
+        model_a: str | None = None,
+        model_b: str | None = None,
     ) -> SimilarityResult:
         """Similarity in [0, 1]. Uses stored vectors when supplied.
 
@@ -368,25 +376,53 @@ class NlpClient:
         so a match run does not re-embed the corpus. Only when a vector is
         missing does this reach for the provider, and only when that fails does
         it fall back to lexical comparison.
+
+        **Vectors from different models are never compared.** Two embedding
+        models place the same sentence in unrelated coordinate systems, so the
+        cosine between them is noise wearing the costume of a similarity score —
+        and when the dimensions happen to agree, nothing about the shape of the
+        data reveals the mistake. Google's retirement of one embedding model in
+        favour of another makes a mixed corpus the normal case, not an edge one,
+        so a stored vector is trusted only alongside the name of the model that
+        produced it. Mismatched pairs re-embed or fall back to lexical.
         """
         if not (text_a or "").strip() or not (text_b or "").strip():
             return SimilarityResult(0.0, "empty", degraded=True)
 
-        if vector_a and vector_b and len(vector_a) == len(vector_b):
+        comparable = _same_model(model_a, model_b)
+
+        if comparable and vector_a and vector_b and len(vector_a) == len(vector_b):
             raw = cosine(vector_a, vector_b)
             # Embedding cosines live in [-1, 1]; map to [0, 1].
             return SimilarityResult(max(0.0, (raw + 1.0) / 2.0), "embedding",
                                     detail={"cosine": round(raw, 4)})
 
         if self.provider.available():
-            a = vector_a or self.generate_embedding(text_a).vector
-            b = vector_b or self.generate_embedding(text_b).vector
+            current = self.provider.embedding_model_name()
+            # Re-embed whatever does not already come from the live model.
+            a = vector_a if (vector_a and _same_model(model_a, current)) else \
+                self.generate_embedding(text_a).vector
+            b = vector_b if (vector_b and _same_model(model_b, current)) else \
+                self.generate_embedding(text_b).vector
             if a and b and len(a) == len(b):
                 raw = cosine(a, b)
                 return SimilarityResult(max(0.0, (raw + 1.0) / 2.0), "embedding",
                                         detail={"cosine": round(raw, 4)})
 
         return SimilarityResult(lexical_similarity(text_a, text_b), "lexical", degraded=True)
+
+
+def _same_model(a: str | None, b: str | None) -> bool:
+    """Whether two vectors may be compared.
+
+    An unlabelled vector is treated as compatible: records written before the
+    label existed would otherwise all fall back to lexical, which would be a
+    silent quality regression across the whole corpus. Once a label is present
+    on both sides it must match.
+    """
+    if not a or not b:
+        return True
+    return a.strip().lower() == b.strip().lower()
 
 
 # Module-level default, so callers need not thread a client through every call.
